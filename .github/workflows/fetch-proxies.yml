@@ -21,13 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
-    # ── Critical for live logging ─────────────────────────────────────────
-    # PYTHONUNBUFFERED makes Python flush after every print(), so each
-    # line appears in the Actions log immediately instead of at the end.
     env:
       PYTHONUNBUFFERED: "1"
       PYTHONIOENCODING: "utf-8"
-      PROXY_LOG_LEVEL: "INFO"        # change to DEBUG for per-endpoint detail
+      PROXY_LOG_LEVEL: "INFO"
 
     steps:
       - name: Checkout repository
@@ -58,21 +55,20 @@ jobs:
       - name: Show results summary
         if: always()
         run: |
-          if [ -f utils/working_proxies.json ]; then
-            python - <<'PY'
-            import json
-            d = json.load(open("utils/working_proxies.json"))
-            print(f"total_working = {d.get('total_working', 0)}")
-            print(f"total_tested  = {d.get('total_tested', 0)}")
-            print(f"generated_at  = {d.get('generated_at', '')}")
-            for p in d.get("proxies", [])[:10]:
-                print(f"  {p['proxy']:<22} {p['type']:<7} "
-                      f"{p['works_with']:<13} {p['avg_ms']}ms")
-            if len(d.get("proxies", [])) > 10:
-                print(f"  ... and {len(d['proxies']) - 10} more")
-            PY
-          else
+          if [ ! -f utils/working_proxies.json ]; then
             echo "No output file produced."
+            exit 0
+          fi
+          echo "─── working_proxies.json ───"
+          jq -r '"total_working = \(.total_working)"' utils/working_proxies.json
+          jq -r '"total_tested  = \(.total_tested)"'  utils/working_proxies.json
+          jq -r '"generated_at  = \(.generated_at)"'  utils/working_proxies.json
+          echo ""
+          echo "Top 10 fastest:"
+          jq -r '.proxies[:10][] | "  \(.proxy)  \(.type)  \(.works_with)  \(.avg_ms)ms"' utils/working_proxies.json || true
+          TOTAL=$(jq '.proxies | length' utils/working_proxies.json)
+          if [ "$TOTAL" -gt 10 ]; then
+            echo "  ... and $((TOTAL - 10)) more"
           fi
 
       - name: Upload results as artifact (fallback)
@@ -89,14 +85,11 @@ jobs:
         run: |
           git config user.name  "proxy-bot"
           git config user.email "proxy-bot@users.noreply.github.com"
-
           if [ ! -f utils/working_proxies.json ]; then
             echo "No output file — nothing to commit."
             exit 0
           fi
-
           git add utils/working_proxies.json
-
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
