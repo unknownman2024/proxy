@@ -29,6 +29,8 @@ OUTPUT_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 EVENT_TEST_URL   = "https://www.eventcinemas.com.au/Movies/GetNowShowing"
 VILLAGE_TEST_URL = "https://villagecinemas.com.au/"
 
+LOG_LEVEL = os.getenv("PROXY_LOG_LEVEL", "INFO").upper()
+
 ua = UserAgent()
 
 
@@ -59,9 +61,6 @@ def log_debug(msg):
         print(f"[{_ts()}] DEBUG  {msg}", flush=True)
 
 
-LOG_LEVEL = os.getenv("PROXY_LOG_LEVEL", "INFO").upper()
-
-
 # ── PROXY SOURCES ────────────────────────────────────────────────────────────
 
 def _fetch_url(url, label):
@@ -76,6 +75,15 @@ def _fetch_url(url, label):
 
 def source_github_lists():
     urls = [
+        ("TheSpeedX/http",   "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"),
+        ("TheSpeedX/socks5", "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"),
+        ("clarketm",         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt"),
+        ("monosans/http",    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"),
+        ("monosans/socks5",  "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies_anonymous/socks5.txt"),
+        ("hookzof",          "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"),
+        ("roosterkid",       "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"),
+        ("MuRongPIG/http",   "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"),
+        ("MuRongPIG/socks5", "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt"),
     ]
     proxies = set()
     for label, url in urls:
@@ -246,9 +254,13 @@ async def _test_proxy_async(session, proxy_str, proxy_type, url, method="GET"):
 async def _test_single_proxy_async(session, proxy_str):
     """
     Test one proxy against both platforms across http/socks5.
-    Logs each attempt and returns a result dict on success, None on failure.
+    Logs each success/failure as one line:
+        proxy: 1.2.3.4:80 ✅
+        proxy: 1.2.3.4:80 ✅ (event)
+        proxy: 1.2.3.4:80 ✅ (village)
+        proxy: 1.2.3.4:80 ❌ (timeout)
     """
-    attempt_log = []
+    last_reason = "no attempt"
 
     for ptype in ("http", "socks5"):
         # --- Event ---
@@ -257,9 +269,9 @@ async def _test_single_proxy_async(session, proxy_str):
         )
         event_ok = event_ms is not None and event_ms <= MAX_ACCEPTABLE_MS
         if event_ms is not None and not event_ok:
-            event_reason = f"event too slow ({event_ms}ms > {MAX_ACCEPTABLE_MS}ms)"
+            event_reason = f"slow {event_ms}ms"
 
-        # --- Village (HEAD, fall back to GET) ---
+        # --- Village (HEAD, fallback GET) ---
         village_ms, village_reason = await _test_proxy_async(
             session, proxy_str, ptype, VILLAGE_TEST_URL, "HEAD"
         )
@@ -269,17 +281,13 @@ async def _test_single_proxy_async(session, proxy_str):
             )
         village_ok = village_ms is not None and village_ms <= MAX_ACCEPTABLE_MS
         if village_ms is not None and not village_ok:
-            village_reason = f"village too slow ({village_ms}ms > {MAX_ACCEPTABLE_MS}ms)"
-
-        attempt_log.append(
-            f"{ptype} → event={event_reason} | village={village_reason}"
-        )
+            village_reason = f"slow {village_ms}ms"
 
         if not event_ok and not village_ok:
-            log_debug(f"{proxy_str} [{ptype}] rejected: {attempt_log[-1]}")
+            last_reason = event_reason if event_ms is None else village_reason
+            log_debug(f"proxy: {proxy_str} [{ptype}] {event_reason} | {village_reason}")
             continue
 
-        # At least one works — build result
         if event_ok and village_ok:
             works_with = "both"
             avg = (event_ms + village_ms) // 2
@@ -300,17 +308,16 @@ async def _test_single_proxy_async(session, proxy_str):
             "tested_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-        e_str = f"{event_ms}ms"   if event_ok   else "—"
-        v_str = f"{village_ms}ms" if village_ok else "—"
         if works_with == "both":
-            log_success(f"{proxy_str} [{ptype}] BOTH         event={e_str} village={v_str} avg={avg}ms")
+            log_success(f"proxy: {proxy_str} ✅")
+        elif works_with == "event_only":
+            log_success(f"proxy: {proxy_str} ✅ (event)")
         else:
-            log_warn(f"{proxy_str} [{ptype}] {works_with.upper():<12} event={e_str} village={v_str}")
+            log_success(f"proxy: {proxy_str} ✅ (village)")
 
         return result
 
-    # All protocols failed
-    log_fail(f"{proxy_str} — all protocols failed | " + " || ".join(attempt_log))
+    log_fail(f"proxy: {proxy_str} ❌ ({last_reason})")
     return None
 
 
@@ -340,9 +347,10 @@ async def test_all_proxies_async(proxy_set):
         f"timeout={PROXY_TEST_TIMEOUT}s | max_acceptable={MAX_ACCEPTABLE_MS}ms"
     )
 
-    working   = []
-    completed = 0
-    start     = time.monotonic()
+    working     = []
+    new_results = []          # only successes from THIS run (for milestone math)
+    completed   = 0
+    start       = time.monotonic()
 
     if os.path.exists(OUTPUT_PATH):
         working = list(_read_output_file().get("proxies", []))
@@ -364,17 +372,22 @@ async def test_all_proxies_async(proxy_set):
         for coro in asyncio.as_completed(tasks):
             result = await coro
             completed += 1
-            if completed % 100 == 0 or completed == total:
-                elapsed = time.monotonic() - start
-                rate = completed / elapsed if elapsed > 0 else 0
-                log_info(
-                    f"Progress {completed}/{total} | "
-                    f"working={len(working)} | "
-                    f"{rate:.1f}/s | "
-                    f"{elapsed:.0f}s elapsed"
-                )
+
             if result:
                 working.append(result)
+                new_results.append(result)
+
+            # ── milestone every 100 tested ──
+            if completed % 100 == 0 or completed == total:
+                v = sum(1 for p in new_results if p["works_with"] == "village_only")
+                e = sum(1 for p in new_results if p["works_with"] == "event_only")
+                b = sum(1 for p in new_results if p["works_with"] == "both")
+                parts = []
+                if v: parts.append(f"village {v}")
+                if e: parts.append(f"event {e}")
+                if b: parts.append(f"both {b}")
+                breakdown = ", ".join(parts) if parts else "none"
+                log_info(f"{len(new_results)}/{completed} success ({breakdown})")
 
     _flush_saves()
     working.sort(key=lambda x: x["avg_ms"])
