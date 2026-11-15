@@ -1,18 +1,14 @@
 name: Fetch Working Proxies
 
 on:
-  # Daily at 02:00 UTC — adjust to your preferred schedule
   schedule:
     - cron: "0 2 * * *"
-  # Allow manual runs from the Actions tab
   workflow_dispatch:
-  # Also run on pushes that touch the scraper
   push:
     paths:
       - "utils/fetchProxies.py"
       - ".github/workflows/fetch-proxies.yml"
 
-# Needed so the job can commit the updated JSON back to the repo
 permissions:
   contents: write
 
@@ -24,6 +20,14 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    # ── Critical for live logging ─────────────────────────────────────────
+    # PYTHONUNBUFFERED makes Python flush after every print(), so each
+    # line appears in the Actions log immediately instead of at the end.
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONIOENCODING: "utf-8"
+      PROXY_LOG_LEVEL: "INFO"        # change to DEBUG for per-endpoint detail
 
     steps:
       - name: Checkout repository
@@ -40,23 +44,33 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install aiohttp requests fake-useragent
+          pip install -r requirements.txt
 
       - name: Verify scraper exists
         run: |
           test -f utils/fetchProxies.py || (echo "utils/fetchProxies.py not found" && exit 1)
 
-      - name: Run proxy scraper & tester
-        run: python utils/fetchProxies.py
-        # Don't fail the whole workflow if no proxies are found —
-        # we still want to commit whatever progress was saved.
+      - name: Run proxy scraper & tester (live logs below)
+        id: scrape
+        run: python -u utils/fetchProxies.py
         continue-on-error: true
 
       - name: Show results summary
         if: always()
         run: |
           if [ -f utils/working_proxies.json ]; then
-            echo "Working proxies: $(python -c 'import json;print(len(json.load(open("utils/working_proxies.json")).get("proxies",[])))')"
+            python - <<'PY'
+            import json
+            d = json.load(open("utils/working_proxies.json"))
+            print(f"total_working = {d.get('total_working', 0)}")
+            print(f"total_tested  = {d.get('total_tested', 0)}")
+            print(f"generated_at  = {d.get('generated_at', '')}")
+            for p in d.get("proxies", [])[:10]:
+                print(f"  {p['proxy']:<22} {p['type']:<7} "
+                      f"{p['works_with']:<13} {p['avg_ms']}ms")
+            if len(d.get("proxies", [])) > 10:
+                print(f"  ... and {len(d['proxies']) - 10} more")
+            PY
           else
             echo "No output file produced."
           fi
