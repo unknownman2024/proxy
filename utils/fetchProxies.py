@@ -76,15 +76,6 @@ def _fetch_url(url, label):
 
 def source_github_lists():
     urls = [
-        ("TheSpeedX/http",   "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"),
-        ("TheSpeedX/socks5", "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"),
-        ("clarketm",         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt"),
-        ("monosans/http",    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"),
-        ("monosans/socks5",  "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies_anonymous/socks5.txt"),
-        ("hookzof",          "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"),
-        ("roosterkid",       "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"),
-        ("MuRongPIG/http",   "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"),
-        ("MuRongPIG/socks5", "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt"),
     ]
     proxies = set()
     for label, url in urls:
