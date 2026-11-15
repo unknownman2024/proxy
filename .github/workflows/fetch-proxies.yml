@@ -1,0 +1,91 @@
+name: Fetch Working Proxies
+
+on:
+  # Daily at 02:00 UTC — adjust to your preferred schedule
+  schedule:
+    - cron: "0 2 * * *"
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+  # Also run on pushes that touch the scraper
+  push:
+    paths:
+      - "utils/fetchProxies.py"
+      - ".github/workflows/fetch-proxies.yml"
+
+# Needed so the job can commit the updated JSON back to the repo
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-proxies
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install aiohttp requests fake-useragent
+
+      - name: Verify scraper exists
+        run: |
+          test -f utils/fetchProxies.py || (echo "utils/fetchProxies.py not found" && exit 1)
+
+      - name: Run proxy scraper & tester
+        run: python utils/fetchProxies.py
+        # Don't fail the whole workflow if no proxies are found —
+        # we still want to commit whatever progress was saved.
+        continue-on-error: true
+
+      - name: Show results summary
+        if: always()
+        run: |
+          if [ -f utils/working_proxies.json ]; then
+            echo "Working proxies: $(python -c 'import json;print(len(json.load(open("utils/working_proxies.json")).get("proxies",[])))')"
+          else
+            echo "No output file produced."
+          fi
+
+      - name: Upload results as artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: working-proxies-${{ github.run_number }}
+          path: utils/working_proxies.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Commit updated working_proxies.json
+        if: always()
+        run: |
+          git config user.name  "proxy-bot"
+          git config user.email "proxy-bot@users.noreply.github.com"
+
+          if [ ! -f utils/working_proxies.json ]; then
+            echo "No output file — nothing to commit."
+            exit 0
+          fi
+
+          git add utils/working_proxies.json
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update working proxies [skip ci] ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            git push
+          fi
