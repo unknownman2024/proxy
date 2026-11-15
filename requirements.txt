@@ -1,0 +1,9 @@
+# ── Core proxy scraper & tester ──────────────────────────────────────────────
+# Async HTTP engine — used for the fast concurrent proxy testing loop.
+aiohttp>=3.9,<4.0
+
+# Sync HTTP — used by the proxy source scrapers (GitHub lists, ProxyScrape, GeoNode).
+requests>=2.31,<3.0
+
+# Rotating User-Agent strings for proxy test requests.
+fake-useragent>=1.5,<2.0
